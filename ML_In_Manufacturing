@@ -1,1 +1,287 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from keras.utils import plot_model
+from keras.models import Model, load_model
+from keras.layers import Input, Dense, Dropout, Conv1D, MaxPooling1D, Flatten, concatenate
+from keras.callbacks import EarlyStopping
+import random
+from os import makedirs, getcwd, path
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve, confusion_matrix
+import seaborn as sns
+# ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown", "tab:pink"]
+#------------------------------------------------------------------------------------------------------------------------------
+parent_dir = getcwd() + "/"
+output = "Width" # "Depth", "Width", "Both"
+if not path.exists(parent_dir + "/Results_" + output + "/"): makedirs(parent_dir + "/Results_" + output + "/")
+#------------------------------------------------------------------------------------------------------------------------------
+#Loading Data
+def load_data(output):
+    X_array = np.load(parent_dir + "/X_normalized_array.npy", allow_pickle= True)
+    Y_array = np.load(parent_dir + "/Y_array.npy", allow_pickle= True)
+    if output == "Depth":
+        Y_array = Y_array[:, 0]
+    elif output == "Width":
+        Y_array = Y_array[:, 1]
+    elif output == "Both": pass
+    else:
+        raise ValueError("Output not recognized. Please choose Depth, Width or Both.")
+    return X_array, Y_array
+
+X, Y = load_data(output = output)
+#------------------------------------------------------------------------------------------------------------------------------
+# CHANGE HERE #
+
+# To make the model development and training more manageable we will use only 20% of the total data.
+# Once you are done with developing your model, remove this line to use the full data for - training & testing - your model.
+_, X, _, Y = train_test_split(X, Y, test_size = 0.1, random_state = 0)
+
+print(X.shape, Y.shape)
+
+for i in [100,789,1246,1846,2468]: print(X[i], "->", Y[i], "\n\n")
+#------------------------------------------------------------------------------------------------------------------------------
+#Exploratory Data Analysis
+def visualize_power_speed(X):
+    fig, axs = plt.subplots(1, 3, figsize=(12, 4))
+
+    # Scatter plot for Power X[:, 0] vs. Speed X[:, 1].
+    axs[0].scatter(X[:, 0], X[:, 1], color="tab:blue", label="Acoustic signal")
+    axs[0].set_xlabel("Power")
+    axs[0].set_ylabel("Speed")
+    axs[0].set_title("Acoustic signal")
+    axs[0].legend()
+    axs[0].grid(linestyle='--', alpha=0.7)
+    axs[0].set_axisbelow(True)
+
+    # KDE for Power (X[:, 0]).
+    pd.Series(X[:, 0]).plot.kde(bw_method=0.25, ax=axs[1], color="tab:orange")
+    axs[1].set_xlabel("Power")
+    axs[1].set_ylabel("Density")
+    axs[1].set_title("KDE of Power")
+    axs[1].grid(linestyle='--', alpha=0.7)
+
+    # KDE for Speed (X[:, 1]).
+    pd.Series(X[:, 1]).plot.kde(bw_method=0.25, ax=axs[2], color="tab:green")
+    axs[2].set_xlabel("Speed")
+    axs[2].set_ylabel("Density")
+    axs[2].set_title("KDE of Speed")
+    axs[2].grid(linestyle='--', alpha=0.7)
+
+    fig.tight_layout()
+    plt.show()
+
+def visualize_acoustic_signal(X, CountX = 3, CountY = 2):
+fig, axs = plt.subplots(CountX, CountY, figsize=(2.5*CountY, 2.5*CountX))
+axs = axs.flatten()
+for i, sample in enumerate([random.uniform(0, len(X)) for _ in range(CountX*CountY)]):
+    axs[i].plot(X[int(sample), 2], color = "tab:blue", label = "Acoustic signal")
+    axs[i].set_xlabel("Time")
+    axs[i].set_ylabel("Volatage (V)")
+    axs[i].set_title("Acoustic signal")
+    axs[i].legend()
+    axs[i].grid(axis='y', linestyle='--', alpha=0.7)
+    axs[i].set_axisbelow(True)
+
+fig.tight_layout()
+plt.show()
+
+visualize_acoustic_signal(X, CountX = 3, CountY = 2)
+#------------------------------------------------------------------------------------------------------------------------------
+# CHANGE HERE #
+def visualize_label_frequency(output, Y):
+    # Create a bar plot to visualize the number of samples in each label category of Y.
+    fig, axs = plt.subplots(1, 1 if len(Y.shape) == 1 else Y.shape[1], figsize=(4*(1 if len(Y.shape) == 1 else Y.shape[1]), 4))
+    axs = [axs] if len(Y.shape) == 1 else axs
+    for i, ax in enumerate(axs):
+        labels, counts = np.unique(Y if len(Y.shape) == 1 else Y[:, i], return_counts=True)
+        ax.bar(labels, counts, color='skyblue' if i==0 else 'orange', edgecolor='black', hatch='///')
+        ax.set_xlabel("Labels")
+        ax.set_ylabel("Frequency")
+        if output == "Both": ax.set_title("Depth" if i==0 else "Width")
+        else: ax.set_title(output)
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
+        ax.set_axisbelow(True)
+    fig.tight_layout()
+    plt.show()
+
+    visualize_label_frequency(output = output, Y=Y)
+#------------------------------------------------------------------------------------------------------------------------------
+#One-hot Coding for Output Labels 
+def onehot_encode(output, Y):
+    Y_encoded = pd.DataFrame(Y, columns = ["Depth", "Width"] if output == "Both" else [output])
+    Y_encoded = pd.get_dummies(Y_encoded, prefix = ["Depth", "Width"] if output == "Both" else [output])
+    Y_encoded = Y_encoded.drop(columns=["Depth_Bad"], errors='ignore')
+    depth_list = []
+    width_list = []
+    for item in list(Y_encoded.columns):
+        if 'Depth' in item:
+            depth_list.append(item)
+        elif 'Width' in item:
+            width_list.append(item)
+    encoded_categories = [depth_list, width_list] if output == "Both" else [list(Y_encoded.columns)]
+
+    return encoded_categories, Y_encoded.to_numpy()
+
+for i in [10,789,1247,1647,2468]: print(Y[i])
+
+encoded_categories, Y = onehot_encode(output, Y)
+
+df = pd.DataFrame(columns = encoded_categories if output != "Both" else encoded_categories[0]+encoded_categories[1])
+for i in [10,789,1247,1647,2468]: df.loc[len(df)] = Y[i]
+print(df)
+#------------------------------------------------------------------------------------------------------------------------------
+#Splitting the dat ainto training and testing 
+
+# Split the data (X, Y) into train and test sets.
+X_train_unshaped, X_test_unshaped, Y_train_unshaped, Y_test_unshaped = train_test_split(X, Y, test_size = 0.3, random_state = 0)
+print(X_train_unshaped.shape, X_test_unshaped.shape, Y_train_unshaped.shape, Y_test_unshaped.shape)
+#------------------------------------------------------------------------------------------------------------------------------
+#Rearranging the inputs and outputs for multi-input multi-output NN
+
+def rearrange_inputs(X):
+    X_new = []
+    Transformed_array = np.array(list(X[:, 2]))
+    X_new.append(np.reshape(Transformed_array,
+                            newshape = (Transformed_array.shape[0], Transformed_array[0].shape[0], 1)).astype("float32"))
+    del Transformed_array
+
+    X_new.append(X[:, 0:2].astype("float32"))
+    return X_new
+
+def rearrange_outputs(encoded_categories, Y):
+    if len(encoded_categories) == 2:
+        Y_list = []
+        Y_list.append(Y[:, :len(encoded_categories[0])])
+        Y_list.append(Y[:, len(encoded_categories[0]):])
+    else: Y_list = Y
+    return Y_list
+
+X_train, X_test = rearrange_inputs(X_train_unshaped), rearrange_inputs(X_test_unshaped)
+Y_train, Y_test = rearrange_outputs(encoded_categories, Y_train_unshaped), rearrange_outputs(encoded_categories, Y_test_unshaped)
+
+print("Training Data:\nInput data shapes - [", X_train[0].shape, X_train[1].shape, "],\nOutput data shapes - [", (Y_train[0].shape, Y_train[1].shape) if output == "Both" else Y_train.shape, "], ")
+print("Testing Data:\nInput data shapes - [", X_test[0].shape, X_test[1].shape, "],\nOutput data shapes - [", (Y_test[0].shape, Y_test[1].shape) if output == "Both" else Y_test.shape, "], ")
+#------------------------------------------------------------------------------------------------------------------------------
+#Creating and training a multi-input mulit-output CNN model 
+
+# CHANGE HERE #
+def create_CNN_Model(dropout, acoustic_signal_shape, input_parameters_shape, output_lengths, output_layers_activations, loss_dict):
+    FILTERS = [16,32,64,128,256]
+    KERNEL_SIZE = [5,5,5,5,5]
+    CONV_STRIDES = [2,2,2,2,2]
+    CONV_ACTIVATION = 'relu'
+    POOL_SIZE = [4,4,4,4,4]
+    POOL_STRIDES = [4,2,2,2,2]
+    Dense_Neurons_list = [1194, 1194, 1194, 1194]
+#------------------------------------------------------------------------------------------------------------------------------
+# Create a CNN network with the above hyperparameters and a network architecture show in the above cell.
+    input_layer_1 = Input(shape = acoustic_signal_shape, name = "Input_1")
+    Convolution1 = Conv1D(filters = FILTERS[0], kernel_size = KERNEL_SIZE[0], strides = CONV_STRIDES[0], padding = "causal", activation=CONV_ACTIVATION, name = "Conv_1")(input_layer_1)
+    MaxPooling1 = MaxPooling1D(pool_size = POOL_SIZE[0], strides = POOL_STRIDES[0], padding = "valid", name = "MaxPooling_1")(Convolution1)
+    Convolution2 = Conv1D(filters = FILTERS[1], kernel_size = KERNEL_SIZE[1], strides = CONV_STRIDES[1], padding = "causal", activation=CONV_ACTIVATION, name = "Conv_2")(MaxPooling1)
+    MaxPooling2 = MaxPooling1D(pool_size = POOL_SIZE[1], strides = POOL_STRIDES[1], padding = "valid", name = "MaxPooling_2")(Convolution2) 
+    Convolution3 = Conv1D(filters = FILTERS[2], kernel_size = KERNEL_SIZE[2], strides = CONV_STRIDES[2], padding = "causal", activation=CONV_ACTIVATION, name = "Conv_3")(MaxPooling2)
+    MaxPooling3 = MaxPooling1D(pool_size = POOL_SIZE[2], strides = POOL_STRIDES[2], padding = "valid", name = "MaxPooling_3")(Convolution3) 
+    Convolution4 = Conv1D(filters = FILTERS[3], kernel_size = KERNEL_SIZE[3], strides = CONV_STRIDES[3], padding = "causal", activation=CONV_ACTIVATION, name = "Conv_4")(MaxPooling3)
+    MaxPooling4 = MaxPooling1D(pool_size = POOL_SIZE[3], strides = POOL_STRIDES[3], padding = "valid", name = "MaxPooling_4")(Convolution4) 
+    Convolution_last = Conv1D(filters = FILTERS[4], kernel_size = KERNEL_SIZE[4], strides = CONV_STRIDES[4], padding = "causal", activation=CONV_ACTIVATION, name = "Conv_5")(MaxPooling4)
+    MaxPooling_last = MaxPooling1D(pool_size = POOL_SIZE[4], strides = POOL_STRIDES[4], padding = "valid", name = "MaxPooling_5")(Convolution_last)
+    Flattened = Flatten(name = "Flatten_1")(MaxPooling_last)
+   
+    Dense1 = Dense(Dense_Neurons_list[0], activation = 'relu', name = "Dense_1")(Flattened)
+    Dropout_Dense1 = Dropout(rate = dropout, name = "DenseDropout_1")(Dense1)
+    input_layer_2 = Input(shape = input_parameters_shape, name = "Input_2")
+    concatenate_layer = concatenate([Dropout_Dense1, input_layer_2], name = "Concatenate_1")
+    Dense2 = Dense(Dense_Neurons_list[1], activation = 'relu', name = "Dense_2")(concatenate_layer)
+    Dropout_Dense2 = Dropout(rate = dropout, name = "DenseDropout_2")(Dense2)
+    Dense3 = Dense(Dense_Neurons_list[2], activation = 'relu', name = "Dense_3")(Dropout_Dense2)
+    Dropout_Dense3 = Dropout(rate = dropout, name = "DenseDropout_3")(Dense3)
+    Dense4 = Dense(Dense_Neurons_list[3], activation = 'relu', name = "Dense_4")(Dropout_Dense3)
+    Dropout_Dense4 = Dropout(rate = dropout, name = "DenseDropout_4")(Dense4)
+    output_layer_1 = Dense(output_lengths[0], activation = output_layers_activations[0], name = "Output_1")(Dropout_Dense4)
+    
+    model = Model(inputs = [input_layer_1, input_layer_2], outputs = output_layer_1)
+    model.compile(loss=loss_dict, optimizer='adam')
+    
+    del FILTERS, KERNEL_SIZE, CONV_STRIDES, CONV_ACTIVATION, POOL_SIZE, POOL_STRIDES
+    return model
+
+# CHANGE HERE #
+acoustic_signal_shape, input_parameters_shape = np.array(X_train[0][0]).shape, X_train[1][0].shape
+output_lengths = [len(encoded_categories[0]), len(encoded_categories[1])] if output == "Both" else [len(encoded_categories[0])]
+#------------------------------------------------------------------------------------------------------------------------------
+# Fill in appropriate last layer activation function and loss value function.
+output_layers_activations = ["softmax"]
+loss_dict = {"Output_1": "categorical_crossentropy"}
+    
+model = create_CNN_Model(dropout = 0.2, 
+                              acoustic_signal_shape = acoustic_signal_shape, input_parameters_shape = input_parameters_shape, 
+                              output_lengths = output_lengths,
+                              output_layers_activations = output_layers_activations, loss_dict = loss_dict)
+print(model.summary())
+
+model_load_flag = True
+
+# CHANGE HERE #
+
+if not model_load_flag:    
+    es = EarlyStopping(monitor='val_loss', mode='min', verbose = 1, patience = 100, restore_best_weights = True)
+    # Fit the model
+    HISTORY = model.fit(X_train, Y_train, validation_split = 0.2, epochs = 1000, verbose = 1, callbacks=[es])
+    # print("Saving Model   ...     ")
+    # model.save(parent_dir + "/Results_" + output + "/" + "Model.keras")
+    
+if not model_load_flag:
+    # Create a training history plot for your trained model.
+    fig, ax = plt.subplots()
+    ax.plot(HISTORY.history["loss"], label = "Training")
+    ax.plot(HISTORY.history["val_loss"], label = "Validation")
+    ax.set_xlabel("Training Epochs")
+    ax.set_ylabel("Loss")
+    ax.grid(axis = "y")
+    ax.set_axisbelow(True)
+    ax.set_title("Training history plot")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(parent_dir + "/Results_" + output + "/" + "Training_history" + ".png", dpi = 500)
+    pd.DataFrame(HISTORY.history).to_excel(parent_dir + "/Results_" + output + "/" + "Training_history.xlsx", index = False)
+    plt.close(fig)
+    del fig, ax, HISTORY
+
+if model_load_flag:
+model = load_model(parent_dir + "/Results_" + output + "/" + output + "_Model.keras")
+#------------------------------------------------------------------------------------------------------------------------------
+#Evaluating the trianged model
+
+Y_pred = model.predict(X_test, verbose = 1)
+
+# CHANGE HERE #
+def evaluate_multiclass_classification(y_true, y_pred, labels):
+    if len(y_true.shape) > 1:
+        y_true = np.argmax(y_true, axis=1)
+    if len(y_pred.shape) > 1:
+        y_pred = np.argmax(y_pred, axis=1)
+
+    metrics = {
+        'Accuracy': accuracy_score(y_true, y_pred), # Calculate accuracy for your pedictions
+        'Precision': precision_score(y_true, y_pred, average='macro', zero_division=0), # Calculate macro average precision for your pedictions
+        'Recall': recall_score(y_true, y_pred, average='macro', zero_division=0), # Calculate macro average recall for your pedictions
+        'F1_score': f1_score(y_true, y_pred, average='macro', zero_division=0), # Calculate macro average F1 score for your pedictions
+    }
+    for key, value in metrics.items():
+        print(f"{key.ljust(20)} : {round(value, 5)}")
+    print("\n")
+    
+    cm = confusion_matrix(y_true, y_pred) # Calculate confusion matrix for your pedictions
+    fig, ax = plt.subplots(figsize=(5,5))
+    sns.heatmap(cm, annot=True, fmt='g', cmap='Blues', cbar=False,
+                xticklabels=labels, yticklabels=labels, ax=ax)
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('True')
+    ax.set_title('Confusion Matrix Heatmap')
+    fig.tight_layout()
+    plt.show()
+
+evaluate_multiclass_classification(y_true = Y_test, y_pred = Y_pred, labels = [i.replace("Width_","") for i in encoded_categories[0]])
 
