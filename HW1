@@ -1,0 +1,138 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import KFold, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_squared_error, r2_score
+from scikeras.wrappers import KerasRegressor
+from tensorflow import keras
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import EarlyStopping
+
+early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+param_grid = {
+    'n_hidden': [1, 2, 3],
+    'n_neurons': [5, 10, 15],
+    'activation': ['sigmoid', 'relu', 'tanh'],
+    'dropout_rate': [0.2, 0.3, 0.4],
+    'optimizer': ['sgd', 'rmsprop', 'adam'],
+    'batch_size': [16],
+    'epochs': [100],
+    'fit__callbacks': [[early_stop]],
+    'fit__validation_split': [0.1]  # Use a validation split for early stopping
+}
+
+# 1. Load or create synthetic data
+np.random.seed(42)
+df = pd.DataFrame({
+    'ball_diameter': np.random.uniform(10, 50, 200),
+    'rolling_force': np.random.uniform(100, 500, 200),
+    'initial_roughness': np.random.uniform(0.1, 2.0, 200),
+    'num_passes': np.random.randint(1, 10, 200),
+    'surface_hardness': np.random.uniform(200, 400, 200),
+    'final_roughness': np.random.uniform(0.05, 1.0, 200)
+})
+
+# 2. EDA (brief)
+print(df.describe())
+print(df.corr())
+
+# 3. Data preparation
+X = df[['ball_diameter', 'rolling_force', 'initial_roughness', 'num_passes']].values
+y_hardness = df['surface_hardness'].values
+y_roughness = df['final_roughness'].values
+y_joint = df[['surface_hardness', 'final_roughness']].values
+
+scaler_X = StandardScaler()
+X_scaled = scaler_X.fit_transform(X)
+
+# 4. Keras model builder
+def build_keras_model(n_hidden=1, n_neurons=10, activation='relu', dropout_rate=0.2, optimizer='adam', output_dim=1):
+    model = keras.Sequential()
+    model.add(layers.Input(shape=(X.shape[1],)))
+    for _ in range(n_hidden):
+        model.add(layers.Dense(n_neurons, activation=activation))
+        model.add(layers.Dropout(dropout_rate))
+    model.add(layers.Dense(output_dim))
+    model.compile(loss='mse', optimizer=optimizer)
+    return model
+
+# 5. Hyperparameter grid
+param_grid = {
+    'n_hidden': [1, 2, 3],
+    'n_neurons': [5, 10, 15],
+    'activation': ['sigmoid', 'relu', 'tanh'],
+    'dropout_rate': [0.2, 0.3, 0.4],
+    'optimizer': ['sgd', 'rmsprop', 'adam'],
+    'batch_size': [16],
+    'epochs': [100]
+}
+
+# 6. K-Fold setup
+kfold = KFold(n_splits=10, shuffle=True, random_state=42)
+
+# 7. Grid search for single output
+def grid_search_single_output(X, y, output_name):
+    keras_reg = KerasRegressor(
+        model=build_keras_model,
+        output_dim=1,
+        verbose=0
+    )
+    grid = GridSearchCV(keras_reg, param_grid, cv=kfold, scoring='neg_mean_squared_error', n_jobs=-1)
+    grid.fit(X, y)
+    print(f"Best params for {output_name}: {grid.best_params_}")
+    return grid
+
+# 8. Grid search for joint output
+def grid_search_joint_output(X, y):
+    keras_reg = KerasRegressor(
+        model=build_keras_model,
+        output_dim=2,
+        verbose=0
+    )
+    grid = GridSearchCV(keras_reg, param_grid, cv=kfold, scoring='neg_mean_squared_error', n_jobs=-1)
+    grid.fit(X, y)
+    print(f"Best params for joint model: {grid.best_params_}")
+    return grid
+
+# 9. Run grid search
+print("Grid search for surface hardness...")
+grid_hardness = grid_search_single_output(X_scaled, y_hardness, "surface_hardness")
+print("Grid search for final roughness...")
+grid_roughness = grid_search_single_output(X_scaled, y_roughness, "final_roughness")
+print("Grid search for joint model...")
+grid_joint = grid_search_joint_output(X_scaled, y_joint)
+
+# 10. Evaluate best models with K-Fold CV
+def evaluate_model(model_builder, X, y, output_dim=1, params=None):
+    mse_scores, r2_scores = [], []
+    for train_idx, test_idx in kfold.split(X):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+        model = model_builder(**params, output_dim=output_dim)
+        model.fit(X_train, y_train, epochs=100, batch_size=16, verbose=0)
+        y_pred = model.predict(X_test)
+        if output_dim == 1:
+            mse_scores.append(mean_squared_error(y_test, y_pred))
+            r2_scores.append(r2_score(y_test, y_pred))
+        else:
+            mse_scores.append(mean_squared_error(y_test, y_pred, multioutput='raw_values'))
+            r2_scores.append(r2_score(y_test, y_pred, multioutput='raw_values'))
+    return np.mean(mse_scores, axis=0), np.mean(r2_scores, axis=0)
+
+# Extract best params for each model
+params_hardness = {k: grid_hardness.best_params_[k] for k in ['n_hidden', 'n_neurons', 'activation', 'dropout_rate', 'optimizer']}
+params_roughness = {k: grid_roughness.best_params_[k] for k in ['n_hidden', 'n_neurons', 'activation', 'dropout_rate', 'optimizer']}
+params_joint = {k: grid_joint.best_params_[k] for k in ['n_hidden', 'n_neurons', 'activation', 'dropout_rate', 'optimizer']}
+
+# Evaluate
+mse_hardness, r2_hardness = evaluate_model(build_keras_model, X_scaled, y_hardness, output_dim=1, params=params_hardness)
+mse_roughness, r2_roughness = evaluate_model(build_keras_model, X_scaled, y_roughness, output_dim=1, params=params_roughness)
+mse_joint, r2_joint = evaluate_model(build_keras_model, X_scaled, y_joint, output_dim=2, params=params_joint)
+
+print(f"Surface Hardness - MSE: {mse_hardness:.3f}, R2: {r2_hardness:.3f}")
+print(f"Final Roughness - MSE: {mse_roughness:.3f}, R2: {r2_roughness:.3f}")
+print(f"Joint Model - MSE: {mse_joint}, R2: {r2_joint}")
+
+# Conclusion
+print("Conclusion:" + "\n" + "Both separate and joint Keras models were trained and evaluated using grid search and 10-fold cross-validation." + "\n" + "The best hyperparameters were selected based on the lowest mean squared error (MSE)." + "\n" + "The joint model allows for simultaneous prediction of both outputs, which may be beneficial if the outputs are correlated." + "\n" + "If the joint model's performance (MSE and R2) is comparable to or better than the separate models, it is preferable due to its simplicity and efficiency." + "\n" + "Otherwise, separate models may be used for higher accuracy on individual outputs.")
