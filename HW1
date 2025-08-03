@@ -1,151 +1,197 @@
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import KFold, ParameterGrid
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, r2_score
-from tensorflow import keras
-from tensorflow.keras import layers
-from tensorflow.keras.callbacks import EarlyStopping
-import tensorflow as tf
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# 1. Load or create synthetic data
+from sklearn.model_selection import KFold, ParameterGrid
+from sklearn.preprocessing  import StandardScaler
+from sklearn.metrics        import mean_squared_error, r2_score
+
+import keras
+from keras import layers
+from keras.callbacks import EarlyStopping
+
+import logging
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+
+# suppress TF warning log
+tf.get_logger().setLevel(logging.ERROR)
+
+# 1. Load synthetic data
 np.random.seed(42)
 df = pd.DataFrame({
-    'ball_diameter': np.random.uniform(10, 50, 200),
-    'rolling_force': np.random.uniform(100, 500, 200),
-    'initial_roughness': np.random.uniform(0.1, 2.0, 200),
-    'num_passes': np.random.randint(1, 10, 200),
-    'surface_hardness': np.random.uniform(200, 400, 200),
-    'final_roughness': np.random.uniform(0.05, 1.0, 200)
+    'ball_diameter':      np.random.uniform(10, 50, 200),
+    'rolling_force':      np.random.uniform(100, 500, 200),
+    'initial_roughness':  np.random.uniform(0.1, 2.0, 200),
+    'num_passes':         np.random.randint(1, 10, 200),
+    'surface_hardness':   np.random.uniform(200, 400, 200),
+    'final_roughness':    np.random.uniform(0.05, 1.0, 200)
 })
 
-# 2. EDA (brief)
-print(df.describe())
-print(df.corr())
+# 2. EDA
+print("=== DESCRIPTIVE STATISTICS ===")
+print(df.describe().to_string())
 
-# 3. Data preparation
-X = df[['ball_diameter', 'rolling_force', 'initial_roughness', 'num_passes']].values
-y_hardness = df['surface_hardness'].values
-y_roughness = df['final_roughness'].values
-y_joint = df[['surface_hardness', 'final_roughness']].values
+print("\n=== CORRELATION MATRIX ===")
+corr = df.corr()
+plt.figure(figsize=(6,5))
+sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", vmin=-1, vmax=1)
+plt.title("Feature Correlations")
+plt.tight_layout()
+plt.show()
 
-scaler_X = StandardScaler()
-X_scaled = scaler_X.fit_transform(X)
+# 3. Scaling method
+print("\nScaling method: StandardScaler (zero mean, unit variance).")
 
-# 4. Keras model builder
-def build_keras_model(n_hidden=1, n_neurons=10, activation='relu', dropout_rate=0.2, optimizer='adam', output_dim=1):
-    model = keras.Sequential()
-    model.add(layers.Input(shape=(X.shape[1],)))
+X = df[['ball_diameter','rolling_force','initial_roughness','num_passes']].values
+y_h = df['surface_hardness'].values
+y_r = df['final_roughness'].values
+y_j = df[['surface_hardness','final_roughness']].values
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# 4. Model builder
+def build_model(n_hidden, n_neurons, activation, dropout_rate, optimizer, output_dim):
+    m = keras.Sequential()
+    m.add(layers.Input(shape=(X_scaled.shape[1],)))
     for _ in range(n_hidden):
-        model.add(layers.Dense(n_neurons, activation=activation))
-        model.add(layers.Dropout(dropout_rate))
-    model.add(layers.Dense(output_dim))
-    model.compile(loss='mse', optimizer=optimizer, run_eagerly=True)
-    return model
+        m.add(layers.Dense(n_neurons, activation=activation))
+        m.add(layers.Dropout(dropout_rate))
+    m.add(layers.Dense(output_dim))
+    m.compile(loss='mse', optimizer=optimizer)
+    return m
 
 # 5. Hyperparameter grid
 param_grid = {
-    'n_hidden': [1, 2, 3],
-    'n_neurons': [5, 10, 15],
-    'activation': ['sigmoid', 'relu', 'tanh'],
+    'n_hidden':     [1, 2, 3],
+    'n_neurons':    [5, 10, 15],
+    'activation':   ['sigmoid','relu','tanh'],
     'dropout_rate': [0.2, 0.3, 0.4],
-    'optimizer': ['sgd', 'rmsprop', 'adam']
+    'optimizer':    ['sgd','rmsprop','adam']
 }
 
-# 6. Early stopping callback
+# 6. Early stopping
 early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-# 7. K-Fold setup
+# 7. Cross‐validation
 kfold = KFold(n_splits=10, shuffle=True, random_state=42)
 
-# ✅ No longer decorated — allows .fit() without symbolic errors
-def train_model(model, X_train, y_train):
-    model.fit(X_train, y_train, epochs=100, batch_size=16,
-              validation_split=0.1, callbacks=[early_stop], verbose=0)
-    return model
-
-# 8. Grid search and cross-validation for single output
-def grid_search_cv_single(X, y, output_dim=1):
-    best_score = np.inf
-    best_params = None
-    best_model = None
-    all_results = []
+def run_grid_cv(X, y, output_dim):
+    records = []
     for params in ParameterGrid(param_grid):
-        mse_scores = []
-        r2_scores = []
+        mse_folds, r2_folds = [], []
         for train_idx, test_idx in kfold.split(X):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-            model = build_keras_model(**params, output_dim=output_dim)
-            y_train = np.reshape(y_train, (-1, output_dim))
-            y_test = np.reshape(y_test, (-1, output_dim))
-            train_model(model, X_train, y_train)
-            y_pred = model.predict(X_test).flatten() if output_dim == 1 else model.predict(X_test)
-            mse_scores.append(mean_squared_error(y_test, y_pred))
-            r2_scores.append(r2_score(y_test, y_pred))
-        avg_mse = np.mean(mse_scores)
-        avg_r2 = np.mean(r2_scores)
-        all_results.append((params, avg_mse, avg_r2))
-        if avg_mse < best_score:
-            best_score = avg_mse
-            best_params = params
-            best_model = build_keras_model(**params, output_dim=output_dim)
-            train_model(best_model, X, np.reshape(y, (-1, output_dim)))
-    return best_params, best_score, best_model, all_results
+            X_tr, X_te = X[train_idx], X[test_idx]
+            y_tr, y_te = y[train_idx], y[test_idx]
+            y_tr2 = y_tr.reshape(-1, output_dim)
+            y_te2 = y_te.reshape(-1, output_dim)
 
-# 9. Grid search and cross-validation for joint output
-def grid_search_cv_joint(X, y):
-    best_score = np.inf
-    best_params = None
-    best_model = None
-    all_results = []
-    for params in ParameterGrid(param_grid):
-        mse_scores = []
-        r2_scores = []
-        for train_idx, test_idx in kfold.split(X):
-            X_train, X_test = X[train_idx], X[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
-            model = build_keras_model(**params, output_dim=2)
-            y_train = np.reshape(y_train, (-1, 2))
-            y_test = np.reshape(y_test, (-1, 2))
-            train_model(model, X_train, y_train)
-            y_pred = model.predict(X_test)
-            mse_scores.append(mean_squared_error(y_test, y_pred, multioutput='raw_values'))
-            r2_scores.append(r2_score(y_test, y_pred, multioutput='raw_values'))
-        avg_mse = np.mean(mse_scores, axis=0)
-        avg_r2 = np.mean(r2_scores, axis=0)
-        all_results.append((params, avg_mse, avg_r2))
-        if np.mean(avg_mse) < best_score:
-            best_score = np.mean(avg_mse)
-            best_params = params
-            best_model = build_keras_model(**params, output_dim=2)
-            train_model(best_model, X, np.reshape(y, (-1, 2)))
-    return best_params, best_score, best_model, all_results
+            m = build_model(**params, output_dim=output_dim)
+            m.fit(
+                X_tr, y_tr2,
+                validation_split=0.1,
+                epochs=100, batch_size=16,
+                callbacks=[early_stop],
+                verbose=0
+            )
+            y_pred = m.predict(X_te)
+            if output_dim == 1:
+                y_pred = y_pred.flatten()
+                y_te2 = y_te2.flatten()
 
-# 10. Run grid search and evaluation
-print("Grid search for surface hardness...")
-params_hardness, mse_hardness, model_hardness, results_hardness = grid_search_cv_single(X_scaled, y_hardness, output_dim=1)
-print("Grid search for final roughness...")
-params_roughness, mse_roughness, model_roughness, results_roughness = grid_search_cv_single(X_scaled, y_roughness, output_dim=1)
-print("Grid search for joint model...")
-params_joint, mse_joint, model_joint, results_joint = grid_search_cv_joint(X_scaled, y_joint)
+            mse_folds.append(mean_squared_error(y_te2, y_pred))
+            r2_folds.append(r2_score(y_te2, y_pred))
 
-# 11. Final evaluation on all data (for reporting)
-y_pred_hardness = model_hardness.predict(X_scaled).flatten()
-y_pred_roughness = model_roughness.predict(X_scaled).flatten()
-y_pred_joint = model_joint.predict(X_scaled)
+        records.append({
+            **params,
+            'avg_mse': np.mean(mse_folds),
+            'std_mse': np.std(mse_folds),
+            'avg_r2':  np.mean(r2_folds),
+            'std_r2':  np.std(r2_folds)
+        })
 
-print("\nBest hyperparameters for surface hardness:", params_hardness)
-print("Best hyperparameters for final roughness:", params_roughness)
-print("Best hyperparameters for joint model:", params_joint)
+    return pd.DataFrame(records)
 
-print(f"\nSurface Hardness - MSE: {mean_squared_error(y_hardness, y_pred_hardness):.3f}, R2: {r2_score(y_hardness, y_pred_hardness):.3f}")
-print(f"Final Roughness - MSE: {mean_squared_error(y_roughness, y_pred_roughness):.3f}, R2: {r2_score(y_roughness, y_pred_roughness):.3f}")
-print(f"Joint Model - MSE: {mean_squared_error(y_joint, y_pred_joint, multioutput='raw_values')}, R2: {r2_score(y_joint, y_pred_joint, multioutput='raw_values')}")
+# 8. Run grid‐search for each approach
+print("Running CV grid‐search for surface hardness...")
+df_h = run_grid_cv(X_scaled, y_h, output_dim=1)
 
-# 12. Conclusion
-print("Both separate and joint Keras models were trained and evaluated using grid search and 10-fold cross-validation.\n"
-      "The best hyperparameters were selected based on the lowest mean squared error (MSE).\n"
-      "The joint model allows for simultaneous prediction of both outputs, which may be beneficial if the outputs are correlated.\n"
-      "If the joint model's performance (MSE and R2) is comparable to or better than the separate models, it is preferable due to its simplicity and efficiency.\n"
-      "Otherwise, separate models may be used for higher accuracy on individual outputs.")
+print("Running CV grid‐search for final roughness...")
+df_r = run_grid_cv(X_scaled, y_r, output_dim=1)
+
+print("Running CV grid‐search for joint model...")
+df_j = run_grid_cv(X_scaled, y_j, output_dim=2)
+
+# 9. Show top 10 results by MSE
+for name, dfres in [('Hardness', df_h), ('Roughness', df_r), ('Joint', df_j)]:
+    print(f"\n=== Top 10 hyperparameter sets for {name} (by avg_mse) ===")
+    print(dfres.sort_values('avg_mse').head(10).to_string(index=False))
+
+# 10. Sample hyperparameter‐performance plot
+plt.figure(figsize=(8,5))
+sns.scatterplot(
+    data=df_h,
+    x='n_neurons', y='avg_mse',
+    hue='n_hidden', palette='viridis',
+    s=100, alpha=0.7
+)
+plt.title("Surface hardness: avg_mse vs n_neurons (hue=n_hidden)")
+plt.tight_layout()
+plt.show()
+
+# 11. Refit best models on full data and save histories
+best_h = df_h.loc[df_h['avg_mse'].idxmin()].to_dict()
+best_r = df_r.loc[df_r['avg_mse'].idxmin()].to_dict()
+best_j = df_j.loc[df_j['avg_mse'].idxmin()].to_dict()
+
+for d in (best_h, best_r, best_j):
+    for k in ['avg_mse','std_mse','avg_r2','std_r2']:
+        d.pop(k)
+
+print("\nBest params (hardness):", best_h)
+print("Best params (roughness):", best_r)
+print("Best params (joint):", best_j)
+
+def train_final(X, y, params, output_dim):
+    m = build_model(**params, output_dim=output_dim)
+    h = m.fit(
+        X, y.reshape(-1, output_dim),
+        validation_split=0.1,
+        epochs=200, batch_size=16,
+        callbacks=[early_stop],
+        verbose=0
+    )
+    return m, h
+
+model_h, hist_h = train_final(X_scaled, y_h, best_h, 1)
+model_r, hist_r = train_final(X_scaled, y_r, best_r, 1)
+model_j, hist_j = train_final(X_scaled, y_j, best_j, 2)
+
+# 12. Plot training/validation loss for all three
+for title, hist in [('Hardness', hist_h), ('Roughness', hist_r), ('Joint', hist_j)]:
+    plt.figure(figsize=(6,4))
+    plt.plot(hist.history['loss'], label='train')
+    plt.plot(hist.history['val_loss'], label='val')
+    plt.title(f'{title} Model Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('MSE Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+# 13. Final performance on the full dataset
+yhat_h = model_h.predict(X_scaled).flatten()
+yhat_r = model_r.predict(X_scaled).flatten()
+yhat_j = model_j.predict(X_scaled)
+
+print("\nFINAL Performance on FULL DATA:")
+print(f"Hardness   MSE={mean_squared_error(y_h, yhat_h):.3f}, R²={r2_score(y_h, yhat_h):.3f}")
+print(f"Roughness  MSE={mean_squared_error(y_r, yhat_r):.3f}, R²={r2_score(y_r, yhat_r):.3f}")
+mse_j, r2_j = (
+    mean_squared_error(y_j, yhat_j, multioutput='raw_values'),
+    r2_score(y_j, yhat_j, multioutput='raw_values')
+)
+print(f"Joint      MSE=[{mse_j[0]:.3f}, {mse_j[1]:.3f}], "
+      f"R²=[{r2_j[0]:.3f}, {r2_j[1]:.3f}]")
