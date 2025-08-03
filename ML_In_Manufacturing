@@ -1,3 +1,5 @@
+# These are just notes compiled into one script. Ignore errors. 
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
