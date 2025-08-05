@@ -2,19 +2,16 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from sklearn.model_selection import KFold, ParameterGrid
 from sklearn.preprocessing  import StandardScaler
 from sklearn.metrics        import mean_squared_error, r2_score
-
 import keras
 from keras import layers
 from keras.callbacks import EarlyStopping
-
 import logging
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 
-# 1. Load synthetic data
+# Data
 np.random.seed(42)
 df = pd.DataFrame({
     'ball_diameter':      np.random.uniform(10, 50, 200),
@@ -25,10 +22,9 @@ df = pd.DataFrame({
     'final_roughness':    np.random.uniform(0.05, 1.0, 200)
 })
 
-# 2. EDA
+# Exploratory Data Analysis
 print("\n=== DESCRIPTIVE STATISTICS ===")
 print(df.describe().to_string())
-
 print("\n=== CORRELATION MATRIX ===")
 corr = df.corr()
 plt.figure(figsize=(6,5))
@@ -37,17 +33,16 @@ plt.title("Feature Correlations")
 plt.tight_layout()
 plt.show()
 
-# 3. Scaling method
+# Scaling method (Standardization) 
 print("\nScaling method: StandardScaler (zero mean, unit variance).")
 X = df[['ball_diameter','rolling_force','initial_roughness','num_passes']].values
 y_h = df['surface_hardness'].values
 y_r = df['final_roughness'].values
 y_j = df[['surface_hardness','final_roughness']].values
-
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-# 4. Model builder
+# Model builder
 def build_model(n_hidden, n_neurons, activation, dropout_rate, optimizer, output_dim):
     model = keras.Sequential()
     model.add(layers.Input(shape=(X_scaled.shape[1],)))
@@ -58,7 +53,7 @@ def build_model(n_hidden, n_neurons, activation, dropout_rate, optimizer, output
     model.compile(loss='mse', optimizer=optimizer)
     return model
 
-# 5. Hyperparameter grid
+# Hyperparameter grid
 param_grid = {
     'n_hidden':     [1, 2, 3],
     'n_neurons':    [5, 10, 15],
@@ -67,10 +62,9 @@ param_grid = {
     'optimizer':    ['sgd','rmsprop','adam']
 }
 
-# 6. Early stopping
 early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
-# 7. Cross‐validation setup
+# Cross‐validation
 kfold = KFold(n_splits=10, shuffle=True, random_state=42)
 
 def run_grid_cv(X, y, output_dim):
@@ -112,7 +106,7 @@ def run_grid_cv(X, y, output_dim):
     return pd.DataFrame(records)
 
 
-# 8. Run grid‐search for each target
+# Grid Search
 print("\nRunning CV grid‐search for surface hardness...")
 df_h = run_grid_cv(X_scaled, y_h, output_dim=1)
 
@@ -122,12 +116,12 @@ df_r = run_grid_cv(X_scaled, y_r, output_dim=1)
 print("Running CV grid‐search for joint model...")
 df_j = run_grid_cv(X_scaled, y_j, output_dim=2)
 
-# 9. Show top 10 hyperparameter sets by avg_mse
+# Top 10 hyperparameter sets
 for name, df_res in [('Hardness', df_h), ('Roughness', df_r), ('Joint', df_j)]:
     print(f"\n=== Top 10 hyperparameter sets for {name} (by avg_mse) ===")
     print(df_res.sort_values('avg_mse').head(10).to_string(index=False))
 
-# 10. Sample hyperparameter‐performance plot
+# Sample hyperparameter‐performance plot
 plt.figure(figsize=(8,5))
 sns.scatterplot(
     data=df_h,
@@ -139,12 +133,11 @@ plt.title("Surface hardness: avg_mse vs n_neurons (hue=n_hidden)")
 plt.tight_layout()
 plt.show()
 
-# 11. Refit best models on the full dataset
+# Refit best models
 best_h = df_h.loc[df_h['avg_mse'].idxmin()].to_dict()
 best_r = df_r.loc[df_r['avg_mse'].idxmin()].to_dict()
 best_j = df_j.loc[df_j['avg_mse'].idxmin()].to_dict()
 
-# remove metric keys before passing into build_model
 for d in (best_h, best_r, best_j):
     for k in ('avg_mse','std_mse','avg_r2','std_r2'):
         d.pop(k, None)
@@ -168,7 +161,7 @@ model_h, hist_h = train_final(X_scaled, y_h, best_h, 1)
 model_r, hist_r = train_final(X_scaled, y_r, best_r, 1)
 model_j, hist_j = train_final(X_scaled, y_j, best_j, 2)
 
-# 12. Plot training & validation loss curves
+# Plot training & validation loss curves
 for title, hist in [('Hardness', hist_h),
                     ('Roughness', hist_r),
                     ('Joint', hist_j)]:
@@ -183,7 +176,7 @@ for title, hist in [('Hardness', hist_h),
     plt.tight_layout()
     plt.show()
 
-# 13. Final evaluation on the full dataset
+# Evaluation
 yhat_h = model_h.predict(X_scaled).flatten()
 yhat_r = model_r.predict(X_scaled).flatten()
 yhat_j = model_j.predict(X_scaled)
