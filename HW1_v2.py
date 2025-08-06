@@ -1,7 +1,6 @@
 # %% [markdown]
 # # Turn‐Assisted Deep Cold Rolling NN Grid‐Search
 
-
 # %%
 import numpy as np
 import pandas as pd
@@ -20,10 +19,9 @@ import logging
 logging.getLogger("tensorflow").setLevel(logging.ERROR)
 
 # %% [markdown]
-# ## 1. Load & Inspect Data
+# ## 1. Synthesize & Inspect Data
 
 # %%
-# Synthesize the data
 np.random.seed(42)
 df = pd.DataFrame({
     'ball_diameter':     np.random.uniform(10, 50, 200),
@@ -33,19 +31,20 @@ df = pd.DataFrame({
     'surface_hardness':  np.random.uniform(200, 400, 200),
     'final_roughness':   np.random.uniform(0.05, 1.0, 200)
 })
-
 print("Dataset shape:", df.shape)
 df.head()
 
 # %% [markdown]
-# ## 2. Exploratory Data Analysis
+# ## 2. Exploratory Data Analysis (EDA)
 
 # %%
 print(df.describe().to_string())
 
 # %%
+# Correlation Heatmap
 plt.figure(figsize=(6,5))
-sns.heatmap(df.corr(), annot=True, fmt=".2f", cmap="coolwarm", vmin=-1, vmax=1)
+sns.heatmap(df.corr(), annot=True, fmt=".2f",
+            cmap="coolwarm", vmin=-1, vmax=1)
 plt.title("Feature Correlations")
 plt.tight_layout()
 plt.show()
@@ -54,7 +53,6 @@ plt.show()
 # ## 3. Scaling
 
 # %%
-print("Scaling method: StandardScaler (zero mean, unit variance).")
 features = ['ball_diameter','rolling_force','initial_roughness','num_passes']
 X = df[features].values
 y_h = df['surface_hardness'].values
@@ -63,6 +61,8 @@ y_j = df[['surface_hardness','final_roughness']].values
 
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
+print("Inputs standardized: mean ~", X_scaled.mean(axis=0),
+      " std ~", X_scaled.std(axis=0))
 
 # %% [markdown]
 # ## 4. Model Builder & Hyperparameter Grid
@@ -92,61 +92,69 @@ early_stop_final = EarlyStopping(monitor='val_loss', patience=10, restore_best_w
 kfold = KFold(n_splits=10, shuffle=True, random_state=42)
 
 # %% [markdown]
-# ## 5. Grid Search with 10‐Fold CV
+# ## 5. Grid‐Search with 10‐Fold CV
 
 # %%
 def run_grid_cv(X, y, output_dim):
     records = []
-    for params in ParameterGrid(param_grid):
+    for idx, params in enumerate(ParameterGrid(param_grid), start=1):
+        print(f"CV combo {idx}/{len(list(ParameterGrid(param_grid)))}: {params}")
         mse_fold, r2_fold = [], []
         for ti, vi in kfold.split(X):
             Xtr, Xte = X[ti], X[vi]
-            ytr, yte = y[ti], y[vi]
-            ytr2 = ytr.reshape(-1, output_dim)
-            yte2 = yte.reshape(-1, output_dim)
+            ytr = y[ti].reshape(-1, output_dim)
+            yte = y[vi].reshape(-1, output_dim)
 
             m = build_model(**params, output_dim=output_dim)
-            m.fit(Xtr, ytr2, epochs=100, batch_size=16,
-                  callbacks=[early_stop_cv], verbose=0)
+            m.fit(Xtr, ytr,
+                  epochs=100, batch_size=16,
+                  callbacks=[early_stop_cv],
+                  validation_split=0.1,
+                  verbose=0)
 
             ypred = m.predict(Xte)
             if output_dim == 1:
                 ypred = ypred.flatten()
-                yte2 = yte2.flatten()
+                yte  = yte.flatten()
 
-            mse_fold.append(mean_squared_error(yte2, ypred))
-            r2_fold.append(r2_score(yte2, ypred))
+            mse_fold.append(mean_squared_error(yte, ypred))
+            r2_fold.append(r2_score(yte, ypred))
 
-        records.append({**params,
-                        'avg_mse': np.mean(mse_fold),
-                        'std_mse': np.std(mse_fold),
-                        'avg_r2':  np.mean(r2_fold),
-                        'std_r2':  np.std(r2_fold)})
+        records.append({
+            **params,
+            'avg_mse': np.mean(mse_fold),
+            'std_mse': np.std(mse_fold),
+            'avg_r2':  np.mean(r2_fold),
+            'std_r2':  np.std(r2_fold)
+        })
     return pd.DataFrame(records)
 
-# %%
-print("Surface hardness CV...")
+print(">> Running CV grid‐search for surface hardness...")
 df_h = run_grid_cv(X_scaled, y_h, output_dim=1)
-print("Final roughness CV...")
+
+print(">> Running CV grid‐search for final roughness...")
 df_r = run_grid_cv(X_scaled, y_r, output_dim=1)
-print("Joint model CV...")
+
+print(">> Running CV grid‐search for joint model...")
 df_j = run_grid_cv(X_scaled, y_j, output_dim=2)
 
 # %% [markdown]
-# ## 6. Show Top‐10 Hyperparameters
+# ## 6. Top‐10 Hyperparameter Sets
 
 # %%
 for name, df_res in [('Hardness',df_h),('Roughness',df_r),('Joint',df_j)]:
-    print(f"\nTop 10 for {name}:")
-    display(df_res.sort_values('avg_mse').head(10))
+    print(f"\n--- Top 10 for {name} (by avg_mse) ---")
+    print(df_res.sort_values('avg_mse').head(10).to_string(index=False))
 
 # %% [markdown]
 # ## 7. Hyperparameter Justification Plot
 
 # %%
 plt.figure(figsize=(8,5))
-sns.scatterplot(data=df_h, x='n_neurons', y='avg_mse',
-                hue='n_hidden', palette='viridis', s=80, alpha=0.7)
+sns.scatterplot(data=df_h,
+                x='n_neurons', y='avg_mse',
+                hue='n_hidden', palette='viridis',
+                s=80, alpha=0.7)
 plt.title("Hardness: avg_mse vs n_neurons (hue=n_hidden)")
 plt.tight_layout()
 plt.show()
@@ -155,7 +163,7 @@ plt.show()
 # ## 8. Refit Best Models & Plot Train/Val Loss
 
 # %%
-# Extract best parameter dicts
+# Extract Best Parameters
 best_h = df_h.loc[df_h['avg_mse'].idxmin()].to_dict()
 best_r = df_r.loc[df_r['avg_mse'].idxmin()].to_dict()
 best_j = df_j.loc[df_j['avg_mse'].idxmin()].to_dict()
@@ -167,26 +175,31 @@ print("Best params (hardness):", best_h)
 print("Best params (roughness):", best_r)
 print("Best params (joint):", best_j)
 
-# Train final with validation split
 def train_final(X, y, params, output_dim):
     m = build_model(**params, output_dim=output_dim)
     h = m.fit(X, y.reshape(-1,output_dim),
-              validation_split=0.1, epochs=200, batch_size=16,
-              callbacks=[early_stop_final], verbose=0)
+              validation_split=0.1,
+              epochs=200, batch_size=16,
+              callbacks=[early_stop_final],
+              verbose=0)
     return m, h
 
 model_h, hist_h = train_final(X_scaled, y_h, best_h, 1)
 model_r, hist_r = train_final(X_scaled, y_r, best_r, 1)
 model_j, hist_j = train_final(X_scaled, y_j, best_j, 2)
 
-# Plot losses
+# Plot training & validation loss
 for title, hist in [('Hardness',hist_h),('Roughness',hist_r),('Joint',hist_j)]:
     plt.figure(figsize=(6,4))
-    plt.plot(hist.history['loss'], label='train')
-    plt.plot(hist.history['val_loss'], label='val')
-    plt.title(f"{title} Loss")
-    plt.xlabel("Epoch"); plt.ylabel("MSE")
-    plt.legend(); plt.grid(True); plt.tight_layout(); plt.show()
+    plt.plot(hist.history['loss'],  label='train')
+    plt.plot(hist.history['val_loss'],label='val')
+    plt.title(f"{title} Training & Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown]
 # ## 9. Final Performance on Full Data
@@ -196,10 +209,9 @@ yhat_h = model_h.predict(X_scaled).flatten()
 yhat_r = model_r.predict(X_scaled).flatten()
 yhat_j = model_j.predict(X_scaled)
 
-print("Hardness   MSE/R²:",
-      mean_squared_error(y_h,yhat_h), r2_score(y_h,yhat_h))
-print("Roughness  MSE/R²:",
-      mean_squared_error(y_r,yhat_r), r2_score(y_r,yhat_r))
-print("Joint      MSE/R²:",
-      mean_squared_error(y_j,yhat_j, multioutput='raw_values'),
-      r2_score(y_j,yhat_j, multioutput='raw_values'))
+print("Final Performance on Full Data:")
+print(f" Hardness   MSE={mean_squared_error(y_h,yhat_h):.3f}, R²={r2_score(y_h,yhat_h):.3f}")
+print(f" Roughness  MSE={mean_squared_error(y_r,yhat_r):.3f}, R²={r2_score(y_r,yhat_r):.3f}")
+mse_j, r2_j = mean_squared_error(y_j,yhat_j, multioutput='raw_values'), \
+             r2_score(y_j,yhat_j, multioutput='raw_values')
+print(f" Joint      MSE=[{mse_j[0]:.3f}, {mse_j[1]:.3f}], R²=[{r2_j[0]:.3f}, {r2_j[1]:.3f}]")
