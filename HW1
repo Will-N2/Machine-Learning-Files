@@ -188,4 +188,4 @@ print(f"Roughness  MSE={mean_squared_error(y_r, yhat_r):.3f}, R²={r2_score(y_r,
 mse_j, r2_j = mean_squared_error(y_j, yhat_j, multioutput='raw_values'), \
              r2_score(y_j, yhat_j, multioutput='raw_values')
 print(f"Joint      MSE=[{mse_j[0]:.3f}, {mse_j[1]:.3f}], "
-      f"R²=[{r2_j[0]:.3f}, {r2_j[1]:.3f}]")
+      f"R²=[{r2_j[0]:.3f}, {r2_j[1]:.3f}]") 
