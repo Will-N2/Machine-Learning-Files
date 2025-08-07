@@ -2,6 +2,10 @@
 # # Turn‐Assisted Deep Cold Rolling NN Grid‐Search
 
 # %%
+import os
+# disable all GPU devices (force CPU-only)
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
