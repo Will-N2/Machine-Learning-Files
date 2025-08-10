@@ -1,0 +1,144 @@
+import shutil
+import os
+import tensorflow as tf
+from tensorflow.keras.preprocessing import image_dataset_from_directory
+from tensorflow.keras import layers, models
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
+
+# Download Files
+SRC = {
+    "Void":        r"C:\Users\wrnol\Downloads\FFF_CNN_train_data\Train\Void",
+    "NoVoid":      r"C:\Users\wrnol\Downloads\FFF_CNN_train_data\Train\Overlap",
+    "Overextrusion": r"C:\Users\wrnol\Downloads\FFF_CNN_train_data\Train\NoVoid",
+}
+DEST_ROOT = os.path.expanduser("~/projects/FFF_CNN_train_data/data")
+os.makedirs(DEST_ROOT, exist_ok=True)
+
+for name, src_path in SRC.items():
+    dest_path = os.path.join(DEST_ROOT, name)
+    if os.path.exists(dest_path):
+        shutil.rmtree(dest_path)
+    print(f"Copying {src_path} → {dest_path} …")
+    shutil.copytree(src_path, dest_path)
+print("Done Copying Files!")
+
+# Count Files
+for name in SRC.keys():
+    folder = os.path.join(DEST_ROOT, name)
+    all_items = os.listdir(folder)
+    imgs = all_items
+    print(f"  {name:14s} → {len(imgs):5d} files")
+
+BATCH_SIZE = 32
+IMG_SIZE = (128,128)
+
+# Define Training
+train_ds = image_dataset_from_directory(
+    DEST_ROOT,
+    validation_split=0.2,
+    subset="training",
+    seed=42,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE)
+
+val_test_ds = image_dataset_from_directory(
+    DEST_ROOT,
+    validation_split=0.2,
+    subset="validation",
+    seed=42,
+    image_size=IMG_SIZE,
+    batch_size=BATCH_SIZE)
+
+# Split val and test 50/50
+val_batches = tf.data.experimental.cardinality(val_test_ds)
+val_ds = val_test_ds.take(val_batches//2)
+test_ds = val_test_ds.skip(val_batches//2)
+
+class_names = train_ds.class_names
+print("Classes:", class_names)
+
+AUTOTUNE = tf.data.AUTOTUNE
+train_ds = train_ds.shuffle(1000).prefetch(AUTOTUNE)
+val_ds   = val_ds.prefetch(AUTOTUNE)
+test_ds  = test_ds.prefetch(AUTOTUNE)
+
+data_augmentation = tf.keras.Sequential([
+    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomRotation(0.1),
+])
+
+num_classes = len(class_names)
+
+# Create Models
+model = models.Sequential([
+    layers.InputLayer(shape=IMG_SIZE + (3,)),
+    data_augmentation,
+    layers.Rescaling(1./255),
+
+    layers.Conv2D(32, 3, activation='relu'),
+    layers.MaxPooling2D(),
+    layers.Conv2D(64, 3, activation='relu'),
+    layers.MaxPooling2D(),
+    layers.Conv2D(128,3, activation='relu'),
+    layers.MaxPooling2D(),
+
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(num_classes, activation='softmax'),
+])
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+model.summary()
+
+EPOCHS = 15
+history = model.fit(
+    train_ds,
+    validation_data=val_ds,
+    epochs=EPOCHS
+)
+
+# Plot loss & Accuracy
+fig, axes = plt.subplots(1,2, figsize=(12,4))
+axes[0].plot(history.history['loss'],  label='train')
+axes[0].plot(history.history['val_loss'],label='val')
+axes[0].set_title('Loss'); axes[0].legend()
+
+axes[1].plot(history.history['accuracy'],  label='train')
+axes[1].plot(history.history['val_accuracy'],label='val')
+axes[1].set_title('Accuracy'); axes[1].legend()
+
+plt.tight_layout()
+plt.show()
+
+def eval_and_plot(ds, title):
+    y_true = np.concatenate([y for x,y in ds], axis=0)
+    y_pred_proba = model.predict(ds)
+    y_pred = np.argmax(y_pred_proba, axis=1)
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_true, y_pred)
+    print(f"\n--- {title} Classification Report ---")
+    print(classification_report(y_true, y_pred,
+                                target_names=class_names))
+
+    plt.figure(figsize=(5,4))
+    sns.heatmap(cm, annot=True, fmt='d',
+                xticklabels=class_names,
+                yticklabels=class_names,
+                cmap='Blues')
+    plt.xlabel('Predicted'); plt.ylabel('True')
+    plt.title(f'{title} Confusion Matrix')
+    plt.show()
+
+# On training set
+eval_and_plot(train_ds, "Train")
+# On testing set
+eval_and_plot(test_ds,  "Test")
